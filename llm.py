@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import time
 import requests
 import os
+import datetime
 
 url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 filename = "tinyshakespeare.txt"
@@ -144,7 +145,7 @@ class Block(nn.Module):
         x = x + self.ffwd(self.ln2(x))
         return x
             
-class BigramLanguageModel(nn.Module):
+class LanguageModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.token_embedding_table = nn.Embedding(VOCAB_SIZE, N_EMB)
@@ -181,7 +182,7 @@ class BigramLanguageModel(nn.Module):
             inputs = torch.cat((inputs, char_next), dim=1) # (B, T+1)
         return inputs
 
-model = BigramLanguageModel().to(DEVICE)
+model = LanguageModel().to(DEVICE)
 # Calculate and print the number of parameters in the model
 num_params = sum(p.numel() for p in model.parameters())
 print(f"Number of model parameters: {num_params}")
@@ -242,4 +243,22 @@ print(f"Training time: {training_time:.2f} seconds")
 
 # Generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
-print(decode(model.generate(context, max_tokens=500)[0].tolist()))
+generated_text = decode(model.generate(context, max_tokens=500)[0].tolist())
+
+# Get current timestamp
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# Create filenames with the timestamp
+generated_text_filename = f"generated_text_{timestamp}.txt"
+model_filename = f"model_weights_{timestamp}.pth"
+
+# Write generated text to file
+with open(generated_text_filename, 'w') as f:
+    f.write(generated_text)
+
+print(f"Generated text saved to {generated_text_filename}")
+
+# Save the model state dictionary
+torch.save(model.state_dict(), model_filename)
+
+print(f"Model weights saved to {model_filename}")
