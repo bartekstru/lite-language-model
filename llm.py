@@ -57,7 +57,26 @@ MAX_ITERS =5000
 EVAL_INTERVAL = 200
 LEARNING_RATE = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DROPOUT = 0.2
+N_LAYER = 3
 # <------------------------------------------------------>
+
+# layer normalization normalizes across the channels, not across the batch
+class LayerNorm(nn.Module):
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.gamma = torch.ones(dim).to(DEVICE)
+        self.beta = torch.zeros(dim).to(DEVICE)
+
+    def __call__(self, x):
+        xmean = x.mean(dim=-1, keepdim=True)
+        xvar = x.var(dim=-1, keepdim=True)
+        
+        out = (x - xmean) / (xvar + self.eps).sqrt()
+        out = out * self.gamma + self.beta
+        
+        return out
 
 
 class MultiHeadAttention(nn.Module):
@@ -66,6 +85,7 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)]) # num_heads x batch x time x head_size
         assert num_heads*head_size == N_EMB
         self.proj = nn.Linear(N_EMB, N_EMB)
+        self.dropout = nn.Dropout(DROPOUT)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1) # batch x time x num_heads x head_size -> batch x time x (num_heads * head_size)
@@ -79,6 +99,7 @@ class Head(nn.Module):
         self.query = nn.Linear(N_EMB, head_size, bias=False)
         self.value = nn.Linear(N_EMB, head_size, bias=False)
         self.register_buffer("tril", torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE))) # buffer is a non trainable tensor in pytorch jargon
+        self.dropout = nn.Dropout(DROPOUT)
     
     def __call__(self, x):
         B, T, C = x.shape
@@ -89,6 +110,7 @@ class Head(nn.Module):
         wei = (k @ q.transpose(-2,-1)) / (C ** 0.5)  # -> B, T, T
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf")) # future does not communicate with the past - only a decoder block
         wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
 
         out = wei @ v  # -> B, T, head_size
         return out
@@ -97,9 +119,10 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd), 
+            nn.Linear(n_embd, 4 * n_embd), 
             nn.ReLU(),
-            nn.Linear(n_embd, n_embd),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(DROPOUT)
         )
 
     def forward(self, x):
@@ -111,10 +134,12 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size) # B, T, n_embd
         self.ffwd = FeedForward(n_embd)
+        self.ln1 = LayerNorm(n_embd)
+        self.ln2 = LayerNorm(n_embd)
 
     def forward(self, x):
-        x = x + self.sa(x)
-        x = x + self.ffwd(x)
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
         return x
             
 class BigramLanguageModel(nn.Module):
@@ -122,11 +147,8 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(VOCAB_SIZE, N_EMB)
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMB)
-        self.blocks = nn.Sequential(
-            Block(N_EMB, n_head=4),
-            Block(N_EMB, n_head=4),
-            Block(N_EMB, n_head=4)
-        )
+        self.blocks = nn.Sequential(*[Block(N_EMB, n_head=4) for _ in range(N_LAYER)])
+        self.ln_f = LayerNorm(N_EMB)
         self.lm_head = nn.Linear(N_EMB, VOCAB_SIZE)
 
     def forward(self, inputs, targets=None):
@@ -135,6 +157,7 @@ class BigramLanguageModel(nn.Module):
         position_embeddings = self.position_embedding_table(torch.arange(T, device=DEVICE)) # (T,N_EMB), time x embedding dimension
         x = token_embeddings + position_embeddings
         x = self.blocks(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x) # (B,T,VOCAB_SIZE), batch x time x vocab size
         
         if targets is None:
