@@ -58,7 +58,7 @@ EVAL_INTERVAL = 200
 LEARNING_RATE = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DROPOUT = 0.2
-N_LAYER = 3
+N_LAYER = 6
 # <------------------------------------------------------>
 
 # layer normalization normalizes across the channels, not across the batch
@@ -90,6 +90,7 @@ class MultiHeadAttention(nn.Module):
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1) # batch x time x num_heads x head_size -> batch x time x (num_heads * head_size)
         out = self.proj(out) # batch x time x N_EMB
+        out = self.dropout(out)
         return out
 
 class Head(nn.Module):
