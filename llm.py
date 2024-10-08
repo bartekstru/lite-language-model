@@ -64,9 +64,13 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)]) # num_heads x batch x time x head_size
+        assert num_heads*head_size == N_EMB
+        self.proj = nn.Linear(N_EMB, N_EMB)
 
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim=-1) # batch x time x num_heads x head_size -> batch x time x (num_heads * head_size)
+        out = torch.cat([h(x) for h in self.heads], dim=-1) # batch x time x num_heads x head_size -> batch x time x (num_heads * head_size)
+        out = self.proj(out) # batch x time x N_EMB
+        return out
 
 class Head(nn.Module):
     def __init__(self, head_size):
@@ -89,34 +93,48 @@ class Head(nn.Module):
         out = wei @ v  # -> B, T, head_size
         return out
 
-
 class FeedForward(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_embd, n_embd), 
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Linear(n_embd, n_embd),
         )
 
     def forward(self, x):
         return self.net(x)
+    
+class Block(nn.Module):
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size) # B, T, n_embd
+        self.ffwd = FeedForward(n_embd)
+
+    def forward(self, x):
+        x = x + self.sa(x)
+        x = x + self.ffwd(x)
+        return x
             
 class BigramLanguageModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.token_embedding_table = nn.Embedding(VOCAB_SIZE, N_EMB)
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMB)
+        self.blocks = nn.Sequential(
+            Block(N_EMB, n_head=4),
+            Block(N_EMB, n_head=4),
+            Block(N_EMB, n_head=4)
+        )
         self.lm_head = nn.Linear(N_EMB, VOCAB_SIZE)
-        self.sa_heads = MultiHeadAttention(4, N_EMB//4)
-        self.ffwd = FeedForward(N_EMB)
 
     def forward(self, inputs, targets=None):
         _, T = inputs.shape
         token_embeddings = self.token_embedding_table(inputs) # (B,T,N_EMB), batch  x time x embedding dimension
         position_embeddings = self.position_embedding_table(torch.arange(T, device=DEVICE)) # (T,N_EMB), time x embedding dimension
         x = token_embeddings + position_embeddings
-        x = self.sa_heads(x)
-        x = self.ffwd(x)
+        x = self.blocks(x)
         logits = self.lm_head(x) # (B,T,VOCAB_SIZE), batch x time x vocab size
         
         if targets is None:
@@ -139,6 +157,10 @@ class BigramLanguageModel(nn.Module):
         return inputs
 
 model = BigramLanguageModel().to(DEVICE)
+# Calculate and print the number of parameters in the model
+num_params = sum(p.numel() for p in model.parameters())
+print(f"Number of model parameters: {num_params}")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE) # takes the gradients and updated the parameters. For a small network we can get away with larger learning rates, typically it would be something like 3-4
 
 start_time = time.time()
