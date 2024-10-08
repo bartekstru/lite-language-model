@@ -186,60 +186,60 @@ model = BigramLanguageModel().to(DEVICE)
 num_params = sum(p.numel() for p in model.parameters())
 print(f"Number of model parameters: {num_params}")
 
-# optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE) # takes the gradients and updated the parameters. For a small network we can get away with larger learning rates, typically it would be something like 3-4
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE) # takes the gradients and updated the parameters. For a small network we can get away with larger learning rates, typically it would be something like 3-4
 
-# start_time = time.time()
+start_time = time.time()
 
-# @torch.no_grad()
-# def estimate_loss():
-#     """
-#     Estimates the average loss for both training and validation datasets.
+@torch.no_grad()
+def estimate_loss():
+    """
+    Estimates the average loss for both training and validation datasets.
 
-#     This function:
-#     1. Sets the model to evaluation mode to disable dropout, etc.
-#     2. Computes loss for EVAL_INTERVAL batches for both train and val splits.
-#     3. Calculates the mean loss for each split.
-#     4. Sets the model back to training mode.
-#     5. Returns a dictionary with average losses for both splits.
+    This function:
+    1. Sets the model to evaluation mode to disable dropout, etc.
+    2. Computes loss for EVAL_INTERVAL batches for both train and val splits.
+    3. Calculates the mean loss for each split.
+    4. Sets the model back to training mode.
+    5. Returns a dictionary with average losses for both splits.
 
-#     The purpose is to get a more stable estimate of model performance
-#     by averaging over multiple batches, helping to track training progress
-#     and detect overfitting.
+    The purpose is to get a more stable estimate of model performance
+    by averaging over multiple batches, helping to track training progress
+    and detect overfitting.
 
-#     Returns:
-#         dict: Contains average losses for 'train' and 'val' splits.
-#     """
-#     out = {}
-#     model.eval()  # set the model to evaluation mode
-#     for split in ['train', 'val']:
-#         losses = torch.zeros(EVAL_INTERVAL)
-#         for k in range(EVAL_INTERVAL):
-#             X, Y = get_batch(split, dataset)  # X is (B, T, C) and Y is (B, T)
-#             X, Y = X.to(DEVICE), Y.to(DEVICE)
-#             _, loss = model(X, Y)
-#             losses[k] = loss.item()
-#         out[split] = losses.mean()
-#     model.train()  # set the model back to training mode
-#     return out
+    Returns:
+        dict: Contains average losses for 'train' and 'val' splits.
+    """
+    out = {}
+    model.eval()  # set the model to evaluation mode
+    for split in ['train', 'val']:
+        losses = torch.zeros(EVAL_INTERVAL)
+        for k in range(EVAL_INTERVAL):
+            X, Y = get_batch(split, dataset)  # X is (B, T, C) and Y is (B, T)
+            X, Y = X.to(DEVICE), Y.to(DEVICE)
+            _, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()  # set the model back to training mode
+    return out
 
-# for steps in range(MAX_ITERS):
-#     xb, yb = get_batch('train', dataset)
-#     xb = xb.to(DEVICE)
-#     yb = yb.to(DEVICE)
-#     logits, loss = model(xb, yb)
-#     if steps % EVAL_INTERVAL == 0:
-#         losses = estimate_loss()
-#         print(f"Step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-#     optimizer.zero_grad()
-#     loss.backward()
-#     optimizer.step()
+for steps in range(MAX_ITERS):
+    xb, yb = get_batch('train', dataset)
+    xb = xb.to(DEVICE)
+    yb = yb.to(DEVICE)
+    logits, loss = model(xb, yb)
+    if steps % EVAL_INTERVAL == 0:
+        losses = estimate_loss()
+        print(f"Step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
 
-# end_time = time.time()
-# training_time = end_time - start_time
+end_time = time.time()
+training_time = end_time - start_time
 
-# print(f"Final loss: {loss.item()}")
-# print(f"Training time: {training_time:.2f} seconds")
+print(f"Final loss: {loss.item()}")
+print(f"Training time: {training_time:.2f} seconds")
 
-# # Generate from the model
-# context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
-# print(decode(model.generate(context, max_tokens=500)[0].tolist()))
+# Generate from the model
+context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
+print(decode(model.generate(context, max_tokens=500)[0].tolist()))
