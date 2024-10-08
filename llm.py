@@ -4,13 +4,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 import time
 import requests
+import os
 
-# Download the dataset
 url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-response = requests.get(url)
+filename = "tinyshakespeare.txt"
 
-with open("tinyshakespeare.txt", "wb") as file:
-    file.write(response.content)
+if not os.path.exists(filename):
+    response = requests.get(url)
+    with open(filename, "wb") as file:
+        file.write(response.content)
+    print(f"Downloaded {filename}")
+else:
+    print(f"{filename} already exists, skipping download")
 
 with open("tinyshakespeare.txt", "r") as file:
     text = file.read()
@@ -48,11 +53,32 @@ VOCAB_SIZE = len(chars)
 N_EMB = 32
 BLOCK_SIZE = 8
 BATCH_SIZE = 32
-MAX_ITERS = 10000
+MAX_ITERS =5000
 EVAL_INTERVAL = 200
-LEARNING_RATE = 1e-2
+LEARNING_RATE = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # <------------------------------------------------------>
+
+class Head(nn.Module):
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(N_EMB, head_size, bias=False)
+        self.query = nn.Linear(N_EMB, head_size, bias=False)
+        self.value = nn.Linear(N_EMB, head_size, bias=False)
+        self.register_buffer("tril", torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE))) # buffer is a non trainable tensor in pytorch jargon
+    
+    def __call__(self, x):
+        B, T, C = x.shape
+        k = self.key(x)     # -> B, T, head_size
+        q = self.query(x)   # -> B, T, head_size
+        v = self.value(x)   # -> B, T, head_size
+
+        wei = (k @ q.transpose(-2,-1)) / (C ** 0.5)  # -> B, T, T
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf")) # future does not communicate with the past - only a decoder block
+        wei = F.softmax(wei, dim=-1)
+
+        out = wei @ v  # -> B, T, head_size
+        return out
 
 class BigramLanguageModel(nn.Module):
     def __init__(self):
@@ -60,11 +86,14 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(VOCAB_SIZE, N_EMB)
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMB)
         self.lm_head = nn.Linear(N_EMB, VOCAB_SIZE)
+        self.sa_head = Head(N_EMB)
 
     def forward(self, inputs, targets=None):
+        _, T = inputs.shape
         token_embeddings = self.token_embedding_table(inputs) # (B,T,N_EMB), batch  x time x embedding dimension
-        position_embeddings = self.position_embedding_table(torch.arange(BLOCK_SIZE, device=DEVICE)) # (T,N_EMB), time x embedding dimension
+        position_embeddings = self.position_embedding_table(torch.arange(T, device=DEVICE)) # (T,N_EMB), time x embedding dimension
         x = token_embeddings + position_embeddings
+        x = self.sa_head(x)
         logits = self.lm_head(x) # (B,T,VOCAB_SIZE), batch x time x vocab size
         
         if targets is None:
@@ -79,14 +108,14 @@ class BigramLanguageModel(nn.Module):
     
     def generate(self, inputs, max_tokens):
         for _ in range(max_tokens):
-            logits, _ = self(inputs)
+            logits, _ = self(inputs[:, -BLOCK_SIZE:]) # crop the input to the last BLOCK_SIZE characters
             logits = logits[:, -1, :] # becomes (B, C)
             probs = F.softmax(logits, dim=1) # (B, C)
             char_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             inputs = torch.cat((inputs, char_next), dim=1) # (B, T+1)
         return inputs
 
-model = BigramLanguageModel(VOCAB_SIZE).to(DEVICE)
+model = BigramLanguageModel().to(DEVICE)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE) # takes the gradients and updated the parameters. For a small network we can get away with larger learning rates, typically it would be something like 3-4
 
 start_time = time.time()
