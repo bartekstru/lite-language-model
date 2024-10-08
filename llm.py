@@ -59,6 +59,15 @@ LEARNING_RATE = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # <------------------------------------------------------>
 
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)]) # num_heads x batch x time x head_size
+
+    def forward(self, x):
+        return torch.cat([h(x) for h in self.heads], dim=-1) # batch x time x num_heads x head_size -> batch x time x (num_heads * head_size)
+
 class Head(nn.Module):
     def __init__(self, head_size):
         super().__init__()
@@ -80,20 +89,34 @@ class Head(nn.Module):
         out = wei @ v  # -> B, T, head_size
         return out
 
+
+class FeedForward(nn.Module):
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd), 
+            nn.ReLU()
+        )
+
+    def forward(self, x):
+        return self.net(x)
+            
 class BigramLanguageModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.token_embedding_table = nn.Embedding(VOCAB_SIZE, N_EMB)
         self.position_embedding_table = nn.Embedding(BLOCK_SIZE, N_EMB)
         self.lm_head = nn.Linear(N_EMB, VOCAB_SIZE)
-        self.sa_head = Head(N_EMB)
+        self.sa_heads = MultiHeadAttention(4, N_EMB//4)
+        self.ffwd = FeedForward(N_EMB)
 
     def forward(self, inputs, targets=None):
         _, T = inputs.shape
         token_embeddings = self.token_embedding_table(inputs) # (B,T,N_EMB), batch  x time x embedding dimension
         position_embeddings = self.position_embedding_table(torch.arange(T, device=DEVICE)) # (T,N_EMB), time x embedding dimension
         x = token_embeddings + position_embeddings
-        x = self.sa_head(x)
+        x = self.sa_heads(x)
+        x = self.ffwd(x)
         logits = self.lm_head(x) # (B,T,VOCAB_SIZE), batch x time x vocab size
         
         if targets is None:
