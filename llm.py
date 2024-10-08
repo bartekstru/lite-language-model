@@ -32,10 +32,10 @@ encode = lambda s: [chars.index(c) for c in s]
 decode = lambda e: ''.join([chars[i] for i in e])
 
 # Create the dataset
-data = torch.tensor(encode(text), dtype=torch.long)
+data = torch.tensor(encode(text), dtype=torch.long)  # (N,)
 n = int(0.9*len(data))
-train_data = data[:n]
-val_data = data[n:] # unbiased estimate of the mnodel performance
+train_data = data[:n]  # (train_size,)
+val_data = data[n:]    # (val_size,)
 dataset = {
     'train': train_data,
     'val': val_data
@@ -45,8 +45,8 @@ dataset = {
 def get_batch(split, dataset):
     data = dataset[split]
     random_indices = torch.randint(len(data) - BLOCK_SIZE, (BATCH_SIZE,))
-    x = torch.stack([data[i:i+BLOCK_SIZE] for i in random_indices])
-    y = torch.stack([data[i+1:i+BLOCK_SIZE+1] for i in random_indices])
+    x = torch.stack([data[i:i+BLOCK_SIZE] for i in random_indices])  # (B, T)
+    y = torch.stack([data[i+1:i+BLOCK_SIZE+1] for i in random_indices])  # (B, T)
     return x, y
 
 # <-------------------Hyperparameters-------------------->
@@ -57,7 +57,7 @@ N_HEAD = 6
 DROPOUT = 0.2
 N_LAYER = 6
 BATCH_SIZE = 64
-MAX_ITERS =5000
+MAX_ITERS = 5000
 EVAL_INTERVAL = 200
 LEARNING_RATE = 3e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -72,11 +72,11 @@ class LayerNorm(nn.Module):
         self.beta = torch.zeros(dim).to(DEVICE)
 
     def __call__(self, x):
-        xmean = x.mean(dim=-1, keepdim=True)
-        xvar = x.var(dim=-1, keepdim=True)
+        xmean = x.mean(dim=-1, keepdim=True)  # (B, T, 1)
+        xvar = x.var(dim=-1, keepdim=True)    # (B, T, 1)
         
-        out = (x - xmean) / (xvar + self.eps).sqrt()
-        out = out * self.gamma + self.beta
+        out = (x - xmean) / (xvar + self.eps).sqrt()  # (B, T, C)
+        out = out * self.gamma + self.beta            # (B, T, C)
         
         return out
 
@@ -84,14 +84,14 @@ class LayerNorm(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)]) # num_heads x batch x time x head_size
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])  # num_heads x (B, T, head_size)
         assert num_heads*head_size == N_EMB
         self.proj = nn.Linear(N_EMB, N_EMB)
         self.dropout = nn.Dropout(DROPOUT)
 
     def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1) # batch x time x num_heads x head_size -> batch x time x (num_heads * head_size)
-        out = self.proj(out) # batch x time x N_EMB
+        out = torch.cat([h(x) for h in self.heads], dim=-1)  # (B, T, num_heads * head_size)
+        out = self.proj(out)  # (B, T, N_EMB)
         out = self.dropout(out)
         return out
 
@@ -101,21 +101,21 @@ class Head(nn.Module):
         self.key = nn.Linear(N_EMB, head_size, bias=False)
         self.query = nn.Linear(N_EMB, head_size, bias=False)
         self.value = nn.Linear(N_EMB, head_size, bias=False)
-        self.register_buffer("tril", torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE))) # buffer is a non trainable tensor in pytorch jargon
+        self.register_buffer("tril", torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE)))  # (BLOCK_SIZE, BLOCK_SIZE)
         self.dropout = nn.Dropout(DROPOUT)
     
     def __call__(self, x):
         B, T, C = x.shape
-        k = self.key(x)     # -> B, T, head_size
-        q = self.query(x)   # -> B, T, head_size
-        v = self.value(x)   # -> B, T, head_size
+        k = self.key(x)    # (B, T, head_size)
+        q = self.query(x)  # (B, T, head_size)
+        v = self.value(x)  # (B, T, head_size)
 
-        wei = (k @ q.transpose(-2,-1)) / (C ** 0.5)  # -> B, T, T
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf")) # future does not communicate with the past - only a decoder block
-        wei = F.softmax(wei, dim=-1)
+        wei = (k @ q.transpose(-2,-1)) / (C ** 0.5)  # (B, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # (B, T, T)
+        wei = F.softmax(wei, dim=-1)  # (B, T, T)
         wei = self.dropout(wei)
 
-        out = wei @ v  # -> B, T, head_size
+        out = wei @ v  # (B, T, head_size)
         return out
 
 class FeedForward(nn.Module):
@@ -129,20 +129,20 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
-        return self.net(x)
+        return self.net(x)  # (B, T, N_EMB)
     
 class Block(nn.Module):
     def __init__(self, n_embd, n_head):
         super().__init__()
         head_size = n_embd // n_head
-        self.sa = MultiHeadAttention(n_head, head_size) # B, T, n_embd
+        self.sa = MultiHeadAttention(n_head, head_size)  # (B, T, N_EMB)
         self.ffwd = FeedForward(n_embd)
         self.ln1 = LayerNorm(n_embd)
         self.ln2 = LayerNorm(n_embd)
 
     def forward(self, x):
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
+        x = x + self.sa(self.ln1(x))  # (B, T, N_EMB)
+        x = x + self.ffwd(self.ln2(x))  # (B, T, N_EMB)
         return x
             
 class LanguageModel(nn.Module):
@@ -156,30 +156,30 @@ class LanguageModel(nn.Module):
 
     def forward(self, inputs, targets=None):
         _, T = inputs.shape
-        token_embeddings = self.token_embedding_table(inputs) # (B,T,N_EMB), batch  x time x embedding dimension
-        position_embeddings = self.position_embedding_table(torch.arange(T, device=DEVICE)) # (T,N_EMB), time x embedding dimension
-        x = token_embeddings + position_embeddings
-        x = self.blocks(x)
-        x = self.ln_f(x)
-        logits = self.lm_head(x) # (B,T,VOCAB_SIZE), batch x time x vocab size
+        token_embeddings = self.token_embedding_table(inputs)  # (B, T, N_EMB)
+        position_embeddings = self.position_embedding_table(torch.arange(T, device=DEVICE))  # (T, N_EMB)
+        x = token_embeddings + position_embeddings  # (B, T, N_EMB)
+        x = self.blocks(x)  # (B, T, N_EMB)
+        x = self.ln_f(x)  # (B, T, N_EMB)
+        logits = self.lm_head(x)  # (B, T, VOCAB_SIZE)
         
         if targets is None:
             loss = None
         else:
             B, T, C = logits.shape           
-            logits = logits.view(B*T, C)
-            targets = targets.view(B*T)
+            logits = logits.view(B*T, C)  # (B*T, VOCAB_SIZE)
+            targets = targets.view(B*T)  # (B*T,)
             loss = F.cross_entropy(logits, targets)
 
         return logits, loss
     
     def generate(self, inputs, max_tokens):
         for _ in range(max_tokens):
-            logits, _ = self(inputs[:, -BLOCK_SIZE:]) # crop the input to the last BLOCK_SIZE characters
-            logits = logits[:, -1, :] # becomes (B, C)
-            probs = F.softmax(logits, dim=1) # (B, C)
-            char_next = torch.multinomial(probs, num_samples=1) # (B, 1)
-            inputs = torch.cat((inputs, char_next), dim=1) # (B, T+1)
+            logits, _ = self(inputs[:, -BLOCK_SIZE:])  # (B, T, VOCAB_SIZE)
+            logits = logits[:, -1, :]  # (B, VOCAB_SIZE)
+            probs = F.softmax(logits, dim=1)  # (B, VOCAB_SIZE)
+            char_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            inputs = torch.cat((inputs, char_next), dim=1)  # (B, T+1)
         return inputs
 
 model = LanguageModel().to(DEVICE)
@@ -187,7 +187,7 @@ model = LanguageModel().to(DEVICE)
 num_params = sum(p.numel() for p in model.parameters())
 print(f"Number of model parameters: {num_params}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE) # takes the gradients and updated the parameters. For a small network we can get away with larger learning rates, typically it would be something like 3-4
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
 start_time = time.time()
 
@@ -215,7 +215,7 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(EVAL_INTERVAL)
         for k in range(EVAL_INTERVAL):
-            X, Y = get_batch(split, dataset)  # X is (B, T, C) and Y is (B, T)
+            X, Y = get_batch(split, dataset)  # X is (B, T) and Y is (B, T)
             X, Y = X.to(DEVICE), Y.to(DEVICE)
             _, loss = model(X, Y)
             losses[k] = loss.item()
@@ -224,10 +224,10 @@ def estimate_loss():
     return out
 
 for steps in range(MAX_ITERS):
-    xb, yb = get_batch('train', dataset)
+    xb, yb = get_batch('train', dataset)  # (B, T)
     xb = xb.to(DEVICE)
     yb = yb.to(DEVICE)
-    logits, loss = model(xb, yb)
+    logits, loss = model(xb, yb)  # logits: (B, T, VOCAB_SIZE), loss: scalar
     if steps % EVAL_INTERVAL == 0:
         losses = estimate_loss()
         print(f"Step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
@@ -242,7 +242,7 @@ print(f"Final loss: {loss.item()}")
 print(f"Training time: {training_time:.2f} seconds")
 
 # Generate from the model
-context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)
+context = torch.zeros((1, 1), dtype=torch.long, device=DEVICE)  # (1, 1)
 generated_text = decode(model.generate(context, max_tokens=500)[0].tolist())
 
 # Get current timestamp
